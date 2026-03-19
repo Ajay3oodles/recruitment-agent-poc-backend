@@ -1,0 +1,69 @@
+# =====================================================
+# Python / Django
+# =====================================================
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+db.sqlite3
+*.sqlite3
+
+.env
+.env.*
+
+# Chroma / Upload folders (if generated data)
+chroma_db/
+uploaddocuments/
+migrations
+
+# Logs
+logs/
+*.log
+
+# =====================================================
+# Node / React / Vite
+# =====================================================
+node_modules/
+dist/
+dist-ssr/
+build/
+.pnp
+.pnp.js
+.vite/
+vite.config.js.timestamp-*
+
+# TypeScript
+*.tsbuildinfo
+
+# Coverage
+coverage/
+
+# =====================================================
+# Environment Variables (NEVER commit)
+# =====================================================
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# =====================================================
+# IDE / Editor
+# =====================================================
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
+# =====================================================
+# OS
+# =====================================================
+.DS_Store
+Thumbs.db
