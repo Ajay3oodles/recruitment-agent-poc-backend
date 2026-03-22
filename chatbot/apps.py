@@ -4,5 +4,7 @@ class ChatbotConfig(AppConfig):
     name = "chatbot"
 
     def ready(self):
-        from chatbot import scheduler
-        scheduler.start()
+        import sys
+        if 'makemigrations' not in sys.argv and 'migrate' not in sys.argv:
+            from chatbot import scheduler
+            scheduler.start()

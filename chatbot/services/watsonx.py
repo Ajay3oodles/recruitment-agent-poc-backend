@@ -131,9 +131,10 @@ def keyword_embed(text: str) -> list[float]:
 #  Endpoint : POST /ml/v1/text/chat
 # ─────────────────────────────────────────────────────────────
 
-def generate_answer(query: str, pages: list, previous_messages: list[dict] = None) -> dict:
+def generate_answer(query: str, pages: list, previous_messages: list[dict] = None,
+                    lead_context: str = "") -> dict:
     """
-    Single LLM call — returns both answer and summary.
+    Single LLM call — returns answer, summary, and lead_data.
     """
 
     # ── Fallback when IBM not configured ─────────────────────
@@ -147,12 +148,12 @@ def generate_answer(query: str, pages: list, previous_messages: list[dict] = Non
             )
         else:
             answer = "I couldn't find relevant information. Please contact Ontario Tech University directly."
-        return {"answer": answer, "summary": ""}
+        return {"answer": answer, "summary": "", "lead_data": {}}
 
     # ── Build prompt parts ────────────────────────────────────
     context        = build_context(pages)
     history        = build_history(previous_messages or [])
-    system_prompt  = build_chat_prompt(query, context, history)
+    system_prompt  = build_chat_prompt(query, context, history, lead_context)
 
     # ── Call IBM /ml/v1/text/chat ─────────────────────────────
     url = (
@@ -189,12 +190,13 @@ def generate_answer(query: str, pages: list, previous_messages: list[dict] = Non
         return {
             "answer": result.get("answer", "").strip(),
             "summary": result.get("summary", "").strip(),
+            "lead_data": result.get("lead_data", {}),
         }
 
     except (json.JSONDecodeError, KeyError):
         logger.warning("[watsonx] LLM did not return valid JSON — using raw text.")
         clean = re.sub(r'\{.*\}', '', raw, flags=re.DOTALL).strip()
-        return {"answer": clean or raw, "summary": ""}
+        return {"answer": clean or raw, "summary": "", "lead_data": {}}
     except httpx.HTTPStatusError as e:
         logger.error(f"[watsonx] HTTP error {e.response.status_code}: {e.response.text}")
         raise
