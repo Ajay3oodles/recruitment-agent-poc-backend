@@ -189,3 +189,8 @@ CELERY_BEAT_SCHEDULE = {
 
 AUTH_USER_MODEL = 'chatbot.User'
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+
+WATSON_ORCHESTRATE_URL      = os.getenv("WATSON_ORCHESTRATE_URL",      "")
+WATSON_ORCHESTRATE_AGENT_ID = os.getenv("WATSON_ORCHESTRATE_AGENT_ID", "")
+WATSON_SEARCH_API_KEY       = os.getenv("WATSON_SEARCH_API_KEY",       "")

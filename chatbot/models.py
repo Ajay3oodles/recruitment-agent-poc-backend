@@ -81,6 +81,17 @@ class Session(BaseEntity):
 
     is_active = models.BooleanField(default=True)
 
+
+    # 🔹 New field for IBM Watson Orchestrator thread
+    thread_id = models.CharField(
+        max_length=255,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Thread ID from IBM Watson Orchestrator"
+    )
+
     metadata = models.JSONField(default=dict, blank=True, null=True)
 
     class Meta:
@@ -131,3 +142,52 @@ class User(AbstractUser):
 
     class Meta:
         db_table = "user"
+
+class Lead(BaseEntity):
+    """
+    Stores website visitor details.
+    One lead can have multiple sessions.
+    """
+
+    first_name = models.CharField(max_length=255, blank=True, default="")
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    is_synced = models.BooleanField(default=False)
+    meeting_date = models.DateField(null=True, blank=True)
+    meeting_time = models.TimeField(null=True, blank=True)
+    conversation_summary = models.TextField(blank=True, null=True)
+    # Lead Classification
+    LEAD_TYPE_CHOICES = [
+        ('student_undergrad', 'Prospective Undergraduate Student'),
+        ('student_grad', 'Prospective Graduate Student'),
+        ('student_international', 'International Student'),
+        ('research_industry', 'Research/Industry Partnership'),
+        ('lifelong_learning', 'Lifelong Learning/Executive Education'),
+        ('other', 'Other'),
+    ]
+    lead_type = models.CharField(
+        max_length=50,
+        choices=LEAD_TYPE_CHOICES,
+        blank=True,
+        null=True,
+        help_text="Type of lead identified through conversation"
+    )
+    # Lead Scoring & Engagement Tracking
+    intent_score = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0.00,
+        help_text="Calculated lead score based on engagement and behavior (0-100)"
+    )
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        db_table = "lead"
+        indexes = [
+            models.Index(fields=["email"]),
+            models.Index(fields=["phone"]),
+        ]
+
+    def __str__(self):
+        return f"{self.first_name or self.email or self.phone or 'Unknown'} ({self.ip_address or 'no IP'})"
