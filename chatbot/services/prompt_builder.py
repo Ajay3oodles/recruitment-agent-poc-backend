@@ -81,13 +81,11 @@ admissions advisors? They can walk you through the next steps personally."
     3. Preferred time: "And what time would you prefer?"
 
 *** TIMEZONE HANDLING ***
-- The user's timezone is provided as metadata (from IP detection on frontend).
-- Our business hours are 10:00 AM — 6:00 PM Eastern Time (Canada).
-- When suggesting meeting times, always convert to the USER's timezone:
-    "Our team is available 10 AM – 6 PM Eastern. In your timezone, \
-that would be [converted range]. What time works for you?"
-- If no timezone info is available, ask:
-    "Just so I can suggest the right times — what timezone are you in?"
+- The user's available time window is provided below (already converted to their timezone).
+- NEVER mention timezones, time conversion, or "Eastern Time" to the user.
+- Simply present the available times as-is:
+    "Our team is available from [start] to [end]. What time works for you?"
+- The system handles all timezone conversion — you just use the times given to you.
 
 ═══════════════════════════════════════════════════════════════
  CONVERSATION BEHAVIOUR
@@ -140,6 +138,9 @@ IMPORTANT:
 - Preserve ALL previously collected lead_data — never reset a field to null if it was already filled.
 - Update intent_score cumulatively based on the scoring signals above.
 - Set lead_type as soon as you can confidently classify the user.
+- For meeting_date: ALWAYS resolve relative dates ("tomorrow", "this Monday", "next week")
+  to an actual YYYY-MM-DD date using today's date provided below.
+- For meeting_time: convert the user's stated time to HH:MM format (24h).
 """
 
 
@@ -212,7 +213,8 @@ def _build_turn_directive(turn_number: int, lead_data: dict) -> str:
     elif has_phone and not has_meeting:
         directive += (
             "ACTION: Collect meeting details. Ask for preferred date, then time. "
-            "Convert to user's timezone if known.\n"
+            "Show the available time window provided below. "
+            "Do NOT mention timezones — just say the available hours.\n"
         )
     else:
         directive += (
@@ -225,7 +227,8 @@ def _build_turn_directive(turn_number: int, lead_data: dict) -> str:
 
 def build_chat_prompt(query: str, context: str, history: str,
                       lead_context: str = "", turn_number: int = 1,
-                      lead_data: dict = None) -> str:
+                      lead_data: dict = None, today_date: str = "",
+                      available_hours: str = "") -> str:
     """
     Full system prompt for the main chat — answer + summary + lead data in one call.
     """
@@ -239,6 +242,21 @@ def build_chat_prompt(query: str, context: str, history: str,
             f"\n═══ COLLECTED LEAD DATA SO FAR ═══\n{lead_context}\n"
             "Preserve all existing data. Only update fields with NEW information "
             "from this exchange.\n"
+        )
+
+    # Today's date so LLM can resolve "tomorrow", "next Monday", etc.
+    if today_date:
+        parts.append(
+            f"\n═══ TODAY'S DATE ═══\n{today_date}\n"
+            "Use this to resolve relative dates like 'tomorrow', 'this Monday', 'next week' "
+            "into actual YYYY-MM-DD format in meeting_date.\n"
+        )
+
+    # Available meeting hours (already converted to user's timezone)
+    if available_hours:
+        parts.append(
+            f"\n═══ AVAILABLE MEETING HOURS (in user's local time) ═══\n{available_hours}\n"
+            "Present these times directly to the user. Do NOT mention timezone conversion.\n"
         )
 
     parts.append(

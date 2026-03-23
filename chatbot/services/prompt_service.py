@@ -12,6 +12,9 @@ Handles all logic for the chat prompt flow:
 
 import json
 import logging
+import httpx
+from datetime import date, datetime, timedelta, time
+from zoneinfo import ZoneInfo
 from chatbot.models import Session, Chat, CMSPage, Lead
 from chatbot.services.watsonx import generate_answer, watsonx_embed_single, keyword_embed, ibm_configured, KW_DIM
 from chatbot.services.prompt_builder import build_lead_context
@@ -19,6 +22,76 @@ from pgvector.django import CosineDistance
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────
+#  TIMEZONE HELPERS
+# ─────────────────────────────────────────────────────────────
+
+# Business hours in Canada Eastern Time
+BUSINESS_TZ = ZoneInfo("America/Toronto")
+BUSINESS_START = 9   # 9 AM ET
+BUSINESS_END = 18    # 6 PM ET
+
+# Simple in-memory cache for IP -> timezone lookups
+_tz_cache: dict[str, str | None] = {}
+
+
+def _get_timezone_from_ip(ip_address: str | None) -> str | None:
+    """
+    Resolve timezone string from an IP address using ip-api.com (free, no key).
+    Returns e.g. "Asia/Kolkata" or None on failure.
+    Caches results to avoid repeated API calls.
+    """
+    if not ip_address or ip_address in ("127.0.0.1", "::1", "localhost"):
+        return None
+
+    if ip_address in _tz_cache:
+        return _tz_cache[ip_address]
+
+    try:
+        resp = httpx.get(
+            f"http://ip-api.com/json/{ip_address}?fields=timezone",
+            timeout=3,
+        )
+        if resp.status_code == 200:
+            tz = resp.json().get("timezone")
+            _tz_cache[ip_address] = tz
+            return tz
+    except Exception as e:
+        logger.warning(f"[prompt_service] IP timezone lookup failed for {ip_address}: {e}")
+
+    _tz_cache[ip_address] = None
+    return None
+
+
+def get_available_hours_for_user(user_tz_str: str | None) -> str:
+    """
+    Convert our business hours (9 AM - 6 PM Eastern) to the user's timezone.
+    Returns a human-readable string like "7:30 PM - 4:30 AM".
+    If no timezone provided, returns Eastern time hours.
+    """
+    if not user_tz_str:
+        return "9:00 AM to 6:00 PM"
+
+    try:
+        user_tz = ZoneInfo(user_tz_str)
+    except (KeyError, Exception):
+        return "9:00 AM to 6:00 PM"
+
+    # Create a reference datetime in Eastern time
+    now_et = datetime.now(BUSINESS_TZ)
+    start_et = now_et.replace(hour=BUSINESS_START, minute=0, second=0, microsecond=0)
+    end_et = now_et.replace(hour=BUSINESS_END, minute=0, second=0, microsecond=0)
+
+    # Convert to user's timezone
+    start_user = start_et.astimezone(user_tz)
+    end_user = end_et.astimezone(user_tz)
+
+    # Windows doesn't support %-I, use %I and strip leading zero
+    start_str = start_user.strftime("%I:%M %p").lstrip("0")
+    end_str = end_user.strftime("%I:%M %p").lstrip("0")
+
+    return f"{start_str} to {end_str}"
 
 
 # ─────────────────────────────────────────────────────────────
@@ -55,10 +128,10 @@ def retrieve(query: str, k: int = 3) -> tuple[list, str]:
 #  LEAD HELPERS
 # ─────────────────────────────────────────────────────────────
 
-def _get_or_create_lead(session: Session) -> Lead:
+def _get_lead_for_session(session: Session) -> Lead | None:
     """
-    Get the Lead linked to this session, or create one.
-    Uses session metadata to store the lead FK.
+    Get the Lead linked to this session, if one exists.
+    Returns None if no lead has been created yet.
     """
     meta = session.metadata or {}
     lead_id = meta.get("lead_id")
@@ -69,7 +142,17 @@ def _get_or_create_lead(session: Session) -> Lead:
         except Lead.DoesNotExist:
             pass
 
-    lead = Lead.objects.create()
+    return None
+
+
+def _create_lead_for_session(session: Session, email: str,
+                              ip_address: str = None) -> Lead:
+    """
+    Create a Lead only when the user provides an email.
+    Links the Lead to the session via metadata.
+    """
+    lead = Lead.objects.create(email=email, ip_address=ip_address)
+    meta = session.metadata or {}
     meta["lead_id"] = lead.id
     session.metadata = meta
     session.save(update_fields=["metadata"])
@@ -111,10 +194,6 @@ def _update_lead_from_response(lead: Lead, lead_data: dict) -> None:
         lead.first_name = lead_data["name"]
         updated_fields.append("first_name")
 
-    if lead_data.get("email") and not lead.email:
-        lead.email = lead_data["email"]
-        updated_fields.append("email")
-
     if lead_data.get("phone") and not lead.phone:
         lead.phone = lead_data["phone"]
         updated_fields.append("phone")
@@ -129,16 +208,16 @@ def _update_lead_from_response(lead: Lead, lead_data: dict) -> None:
             lead.intent_score = min(new_score, 100)
             updated_fields.append("intent_score")
 
-    if lead_data.get("meeting_date") and not lead.meeting_date:
-        from datetime import date
+    # Meeting date — always update (user might reschedule)
+    if lead_data.get("meeting_date"):
         try:
             lead.meeting_date = date.fromisoformat(lead_data["meeting_date"])
             updated_fields.append("meeting_date")
         except (ValueError, TypeError):
             pass
 
-    if lead_data.get("meeting_time") and not lead.meeting_time:
-        from datetime import time
+    # Meeting time — always update (user might reschedule)
+    if lead_data.get("meeting_time"):
         try:
             lead.meeting_time = time.fromisoformat(lead_data["meeting_time"])
             updated_fields.append("meeting_time")
@@ -158,9 +237,15 @@ def _update_lead_from_response(lead: Lead, lead_data: dict) -> None:
 #  MAIN SERVICE
 # ─────────────────────────────────────────────────────────────
 
-def handle_chat(query: str, session_id: int = None) -> dict:
+def handle_chat(query: str, session_id: int = None,
+                ip_address: str = None) -> dict:
     """
     Full chat flow — called by the view.
+
+    Args:
+        query:      User's message
+        session_id: Existing session ID (None for new conversation)
+        ip_address: User's IP address (from frontend or request headers)
 
     Returns:
         {
@@ -187,9 +272,9 @@ def handle_chat(query: str, session_id: int = None) -> dict:
             is_active=True,
         )
 
-    # ── 3. Get or create Lead for this session ────────────────
-    lead = _get_or_create_lead(session)
-    current_lead_data = _get_current_lead_data(lead)
+    # ── 3. Check if Lead already exists for this session ──────
+    lead = _get_lead_for_session(session)
+    current_lead_data = _get_current_lead_data(lead) if lead else {}
 
     # ── 4. Save user message ──────────────────────────────────
     Chat.objects.create(
@@ -215,18 +300,39 @@ def handle_chat(query: str, session_id: int = None) -> dict:
     # Count user messages (including current one) to determine turn number
     turn_number = sum(1 for m in previous_messages if m["role"] == "user")
 
+    # Resolve timezone from IP and convert business hours
+    user_tz = _get_timezone_from_ip(ip_address)
+    available_hours = get_available_hours_for_user(user_tz)
+
+    # Today's date so LLM can resolve "tomorrow" etc.
+    today_str = date.today().strftime("%Y-%m-%d (%A)")
+
     try:
-        result  = generate_answer(
+        result = generate_answer(
             query, pages, previous_messages, lead_context,
             turn_number=turn_number, lead_data=current_lead_data,
+            today_date=today_str, available_hours=available_hours,
         )
         answer  = result["answer"]
         summary = result["summary"]
 
-        # ── 8. Update Lead from LLM response ──────────────────
+        # ── 8. Handle Lead creation/update from LLM response ──
         lead_data = result.get("lead_data", {})
         if lead_data:
-            _update_lead_from_response(lead, lead_data)
+            extracted_email = lead_data.get("email")
+
+            # Lead doesn't exist yet — create ONLY when email is captured
+            if not lead and extracted_email:
+                lead = _create_lead_for_session(
+                    session, email=extracted_email, ip_address=ip_address
+                )
+                # Remove email from lead_data since we already set it
+                lead_data.pop("email", None)
+                _update_lead_from_response(lead, lead_data)
+
+            elif lead:
+                # Lead already exists — update with new data
+                _update_lead_from_response(lead, lead_data)
 
     except Exception as e:
         logger.error(f"[prompt_service] LLM call failed: {e}")

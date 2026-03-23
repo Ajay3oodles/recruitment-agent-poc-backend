@@ -133,7 +133,8 @@ def keyword_embed(text: str) -> list[float]:
 
 def generate_answer(query: str, pages: list, previous_messages: list[dict] = None,
                     lead_context: str = "", turn_number: int = 1,
-                    lead_data: dict = None) -> dict:
+                    lead_data: dict = None, today_date: str = "",
+                    available_hours: str = "") -> dict:
     """
     Single LLM call — returns answer, summary, and lead_data.
     """
@@ -159,6 +160,8 @@ def generate_answer(query: str, pages: list, previous_messages: list[dict] = Non
         lead_context=lead_context,
         turn_number=turn_number,
         lead_data=lead_data or {},
+        today_date=today_date,
+        available_hours=available_hours,
     )
 
     # ── Build chat messages (system + history + current query) ─

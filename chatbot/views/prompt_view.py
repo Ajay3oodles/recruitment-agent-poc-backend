@@ -58,6 +58,13 @@ def chat_view(request):
     if not session_id:
         session_id = None
 
+    # IP address: prefer frontend-sent value, fallback to request headers
+    ip_address = (
+        body.get("ip_address")
+        or request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+        or request.META.get("REMOTE_ADDR")
+    )
+
     # ── Route to correct flow ─────────────────────────────────
     using_agent = orchestrate_configured()
 
@@ -71,8 +78,11 @@ def chat_view(request):
             # FLOW B — Watson Orchestrate thread
             result = handle_agent_chat(query=query, session_id=session_id)
         else:
-            # FLOW A — existing direct LLM call (untouched)
-            result = handle_chat(query=query, session_id=session_id)
+            # FLOW A — direct LLM call with lead capture
+            result = handle_chat(
+                query=query, session_id=session_id,
+                ip_address=ip_address,
+            )
 
         # Tell the frontend which flow was used (useful for debugging)
         result["flow"] = "agent" if using_agent else "direct"
