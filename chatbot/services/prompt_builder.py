@@ -143,12 +143,96 @@ IMPORTANT:
 """
 
 
+def _build_turn_directive(turn_number: int, lead_data: dict) -> str:
+    """
+    Generate an explicit instruction telling the LLM what lead action
+    to take THIS turn based on turn count and what data is already collected.
+    Llama 11B needs very direct cues — it won't count turns on its own.
+    """
+    has_name = bool(lead_data.get("name"))
+    has_email = bool(lead_data.get("email"))
+    has_phone = bool(lead_data.get("phone"))
+    has_meeting = bool(lead_data.get("meeting_date"))
+
+    directive = f"\n═══ CURRENT TURN: {turn_number} (user messages so far) ═══\n"
+
+    if turn_number == 1:
+        directive += (
+            "ACTION: This is the FIRST message. Greet the user warmly and ask what "
+            "they are exploring (undergrad, grad, international, or something else). "
+            "Do NOT ask for any personal information yet.\n"
+        )
+    elif turn_number == 2:
+        directive += (
+            "ACTION: Classify the user's intent from their response. Answer their "
+            "question helpfully using the retrieved content. "
+            "Do NOT ask for personal information yet — focus on delivering value.\n"
+        )
+    elif turn_number == 3 and not has_name:
+        directive += (
+            "ACTION: You have delivered value for 2 turns. At the END of your helpful "
+            "response, casually ask for the user's name. Example: "
+            '"By the way, what should I call you?" '
+            "Do NOT force it — weave it naturally at the end.\n"
+        )
+    elif turn_number == 4 and not has_name:
+        directive += (
+            "ACTION: The user did not provide their name last turn. That is OK. "
+            "Answer their question normally. Do NOT ask for name again this turn. "
+            "Wait one more turn.\n"
+        )
+    elif turn_number == 5 and not has_name:
+        directive += (
+            "ACTION: Try asking for the user's name ONE more time, gently: "
+            '"No worries at all! Just thought it\'d be nice to address you by name." '
+            "If they still don't provide it, NEVER ask again.\n"
+        )
+    elif not has_email and has_name and turn_number >= 4:
+        directive += (
+            "ACTION: You know the user's name. After answering their question, "
+            "offer to email them a personalized summary: "
+            '"I can put together a summary of everything we discussed and email it to you '
+            '— would you like that?" '
+            "Frame it as a benefit, not a demand.\n"
+        )
+    elif not has_email and not has_name and turn_number >= 5:
+        directive += (
+            "ACTION: After answering their question, offer to email them useful info: "
+            '"Want me to send you the key deadlines and next steps so you don\'t miss anything?" '
+            "Only ask ONCE this conversation.\n"
+        )
+    elif has_email and not has_phone and turn_number >= 6:
+        directive += (
+            "ACTION: The user has shared their email. After resolving their current "
+            "question, suggest scheduling a meeting: "
+            '"Would you like to schedule a quick call with one of our admissions advisors? '
+            'They can walk you through the next steps personally." '
+            "If they agree, ask for phone number first, then date, then time.\n"
+        )
+    elif has_phone and not has_meeting:
+        directive += (
+            "ACTION: Collect meeting details. Ask for preferred date, then time. "
+            "Convert to user's timezone if known.\n"
+        )
+    else:
+        directive += (
+            "ACTION: Continue answering the user's questions helpfully. "
+            "All lead data collection is complete or not applicable this turn.\n"
+        )
+
+    return directive
+
+
 def build_chat_prompt(query: str, context: str, history: str,
-                      lead_context: str = "") -> str:
+                      lead_context: str = "", turn_number: int = 1,
+                      lead_data: dict = None) -> str:
     """
     Full system prompt for the main chat — answer + summary + lead data in one call.
     """
     parts = [SYSTEM_PROMPT]
+
+    # Turn-aware directive — tells LLM exactly what to do this turn
+    parts.append(_build_turn_directive(turn_number, lead_data or {}))
 
     if lead_context:
         parts.append(
@@ -161,7 +245,10 @@ def build_chat_prompt(query: str, context: str, history: str,
         f"\n═══ RETRIEVED CONTENT FROM ONTARIO TECH WEBSITE ═══\n\n{context}"
     )
 
-    parts.append(history)
+    # History is now passed as chat messages, not in system prompt
+    # Only include if non-empty (for backwards compat)
+    if history:
+        parts.append(history)
 
     return "".join(parts)
 

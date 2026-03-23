@@ -132,7 +132,8 @@ def keyword_embed(text: str) -> list[float]:
 # ─────────────────────────────────────────────────────────────
 
 def generate_answer(query: str, pages: list, previous_messages: list[dict] = None,
-                    lead_context: str = "") -> dict:
+                    lead_context: str = "", turn_number: int = 1,
+                    lead_data: dict = None) -> dict:
     """
     Single LLM call — returns answer, summary, and lead_data.
     """
@@ -152,8 +153,26 @@ def generate_answer(query: str, pages: list, previous_messages: list[dict] = Non
 
     # ── Build prompt parts ────────────────────────────────────
     context        = build_context(pages)
-    history        = build_history(previous_messages or [])
-    system_prompt  = build_chat_prompt(query, context, history, lead_context)
+    # Don't put history in system prompt — we pass it as chat messages
+    system_prompt  = build_chat_prompt(
+        query, context, history="",
+        lead_context=lead_context,
+        turn_number=turn_number,
+        lead_data=lead_data or {},
+    )
+
+    # ── Build chat messages (system + history + current query) ─
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # Add previous conversation as proper user/assistant turns
+    prev = previous_messages or []
+    # Exclude the last message since it's the current query we just saved
+    for msg in prev[:-1]:
+        role = "user" if msg["role"] == "user" else "assistant"
+        messages.append({"role": role, "content": msg["message"]})
+
+    # Current user query as the final user message
+    messages.append({"role": "user", "content": query})
 
     # ── Call IBM /ml/v1/text/chat ─────────────────────────────
     url = (
@@ -163,12 +182,9 @@ def generate_answer(query: str, pages: list, previous_messages: list[dict] = Non
     payload = {
         "model_id":   settings.IBM_MODEL_ID,
         "project_id": settings.IBM_PROJECT_ID,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": query},
-        ],
+        "messages":   messages,
         "parameters": {
-            "max_new_tokens":     500,
+            "max_new_tokens":     600,
             "decoding_method":    "greedy",
             "repetition_penalty": 1.1,
         },

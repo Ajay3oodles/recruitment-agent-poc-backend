@@ -212,8 +212,14 @@ def handle_chat(query: str, session_id: int = None) -> dict:
     # ── 7. Single LLM call — answer + summary + lead data ─────
     lead_context = build_lead_context(current_lead_data)
 
+    # Count user messages (including current one) to determine turn number
+    turn_number = sum(1 for m in previous_messages if m["role"] == "user")
+
     try:
-        result  = generate_answer(query, pages, previous_messages, lead_context)
+        result  = generate_answer(
+            query, pages, previous_messages, lead_context,
+            turn_number=turn_number, lead_data=current_lead_data,
+        )
         answer  = result["answer"]
         summary = result["summary"]
 
